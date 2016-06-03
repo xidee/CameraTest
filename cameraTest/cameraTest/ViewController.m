@@ -9,7 +9,8 @@
 #import "ViewController.h"
 #import "CameraSlider.h"
 #import <AVFoundation/AVFoundation.h>
-@interface ViewController ()<UITableViewDelegate,UITableViewDataSource>
+
+@interface ViewController ()<UITableViewDelegate,UITableViewDataSource,AVCaptureVideoDataOutputSampleBufferDelegate>
 
 @property (nonatomic ,strong) AVCaptureSession *session;
 @property (nonatomic ,strong) AVCaptureDeviceInput *input;
@@ -30,6 +31,7 @@
     
     //输入输出流数据传递
     self.session = [[AVCaptureSession alloc] init];
+    self.session.sessionPreset = AVCaptureSessionPreset640x480;
     //创建输入流
     for (AVCaptureDevice *device in [AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo]) {
         if (device.position == AVCaptureDevicePositionBack) {
@@ -49,9 +51,23 @@
     if ([self.session canAddInput:self.input]) {
         [self.session addInput:self.input];
     }
-    if ([self.session canAddOutput:self.output]) {
-        [self.session addOutput:self.output];
+//    if ([self.session canAddOutput:self.output]) {
+//        [self.session addOutput:self.output];
+//    }
+    
+    //创建扫描输出
+    AVCaptureVideoDataOutput *dataOutput = [[AVCaptureVideoDataOutput alloc] init];
+    dispatch_queue_t queue = dispatch_queue_create("cameraQueue", NULL);
+    [dataOutput setSampleBufferDelegate:self queue:queue];
+    
+    NSString* key = (NSString*)kCVPixelBufferPixelFormatTypeKey;
+    NSNumber* value = [NSNumber numberWithUnsignedInt:kCVPixelFormatType_32BGRA];
+    dataOutput.videoSettings = [NSDictionary dictionaryWithObject:value forKey:key];
+    
+    if ([self.session canAddOutput:dataOutput]) {
+        [self.session addOutput:dataOutput];
     }
+    
     //相机预览图层
     self.layer = [[AVCaptureVideoPreviewLayer alloc]initWithSession:self.session];
     self.layer.frame = self.view.bounds;
@@ -278,6 +294,56 @@
     }
     
     return cell;
+}
+
+- (void)captureOutput:(AVCaptureOutput *)captureOutput didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection
+{
+    //截取视频流的图像
+    CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+    CVPixelBufferLockBaseAddress(imageBuffer,0);
+    uint8_t* baseAddress = (uint8_t *)CVPixelBufferGetBaseAddress(imageBuffer);
+    
+    size_t width  = CVPixelBufferGetWidth(imageBuffer);
+    size_t height = CVPixelBufferGetHeight(imageBuffer);
+    size_t bytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer);
+    
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    CGDataProviderRef provider = CGDataProviderCreateWithData(NULL, baseAddress, bytesPerRow * height, NULL);
+    
+    CGImageRef imageRef = CGImageCreate(width, height, 8, 32, bytesPerRow, colorSpace,
+                                        kCGBitmapByteOrder32Little|kCGImageAlphaPremultipliedFirst,
+                                        provider, NULL, false, kCGRenderingIntentDefault);
+    
+    CGImageRef subImageRef = CGImageCreateWithImageInRect(imageRef, CGRectMake((640-360)/2, 0, 360, 480));
+    
+    
+    UIImage *image = [UIImage imageWithCGImage:subImageRef];
+    NSData* imageData =  UIImagePNGRepresentation(image);
+    UIImage* newImage = [UIImage imageWithData:imageData];
+    UIImageWriteToSavedPhotosAlbum(newImage, nil, nil, nil);
+    
+    size_t subWidth  = 360 ;
+    size_t subHeight = 480  ;
+    
+    CGContextRef context = CGBitmapContextCreate(NULL, subWidth, subHeight,
+                                                 CGImageGetBitsPerComponent(subImageRef), 0,
+                                                 CGImageGetColorSpace(subImageRef),
+                                                 CGImageGetBitmapInfo(subImageRef));
+    
+    
+    CGContextTranslateCTM(context, 0, subHeight);
+    CGContextRotateCTM(context, -M_PI/2);
+    
+    CGContextDrawImage(context, CGRectMake(0, 0, subHeight, subWidth), subImageRef);
+    
+    uint8_t* data = (uint8_t*)CGBitmapContextGetData(context);
+    
+    CGContextRelease(context);
+    CGImageRelease(imageRef);
+    CGImageRelease(subImageRef);
+    CGDataProviderRelease(provider);
+    CGColorSpaceRelease(colorSpace);
+    CVPixelBufferUnlockBaseAddress(imageBuffer,0);
 }
 
 @end
